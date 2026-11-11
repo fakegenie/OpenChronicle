@@ -9,14 +9,17 @@ python3 -I tools/android_sdk.py builds."""
 
 import argparse
 import importlib.util
+import math
 import os
 from pathlib import Path
 import plistlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import zipfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build" / "port"
@@ -232,6 +235,156 @@ def version_code(name):
     return max(1, parts[0] * 1000000 + parts[1] * 1000 + parts[2])
 
 
+ANDROID_DENSITIES = [("mdpi", 48, 108), ("hdpi", 72, 162), ("xhdpi", 96, 216), ("xxhdpi", 144, 324), ("xxxhdpi", 192, 432)]
+ANDROID_ADAPTIVE_ICON = """<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/icon_background" />
+    <foreground android:drawable="@mipmap/icon_foreground" />
+</adaptive-icon>
+"""
+
+
+def read_png_rgba(path):
+    data = path.read_bytes()
+    pos, width, height, color_type, idat = 8, 0, 0, 0, bytearray()
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b"IHDR":
+            width, height, _, color_type = struct.unpack(">IIBB", body[:10])
+        elif kind == b"IDAT":
+            idat.extend(body)
+    raw = zlib.decompress(bytes(idat))
+    channels = 4 if color_type == 6 else 3
+    stride = width * channels
+    out, prev, index = bytearray(width * height * 4), bytearray(stride), 0
+    for y in range(height):
+        flt = raw[index]
+        row = bytearray(raw[index + 1:index + 1 + stride])
+        index += 1 + stride
+        if flt == 1:
+            for x in range(channels, stride):
+                row[x] = (row[x] + row[x - channels]) & 0xFF
+        elif flt == 2:
+            for x in range(stride):
+                row[x] = (row[x] + prev[x]) & 0xFF
+        elif flt == 3:
+            for x in range(stride):
+                a = row[x - channels] if x >= channels else 0
+                row[x] = (row[x] + ((a + prev[x]) >> 1)) & 0xFF
+        elif flt == 4:
+            for x in range(stride):
+                a = row[x - channels] if x >= channels else 0
+                b, c = prev[x], prev[x - channels] if x >= channels else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                row[x] = (row[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 0xFF
+        prev = row
+        if channels == 4:
+            out[y * width * 4:(y + 1) * width * 4] = row
+        else:
+            for x in range(width):
+                out[(y * width + x) * 4:(y * width + x) * 4 + 4] = bytes([row[x * 3], row[x * 3 + 1], row[x * 3 + 2], 255])
+    return width, height, out
+
+
+def write_png_rgba(path, width, height, rgba):
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        raw.extend(rgba[y * width * 4:(y + 1) * width * 4])
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+
+def box_scale_rgba(src, sw, sh, dw, dh):
+    out = bytearray(dw * dh * 4)
+    for dy in range(dh):
+        y0, y1 = dy * sh / dh, (dy + 1) * sh / dh
+        iy0, iy1 = int(y0), min(sh - 1, int(math.ceil(y1)) - 1)
+        for dx in range(dw):
+            x0, x1 = dx * sw / dw, (dx + 1) * sw / dw
+            ix0, ix1 = int(x0), min(sw - 1, int(math.ceil(x1)) - 1)
+            tr = tg = tb = tw = 0.0
+            for sy in range(iy0, iy1 + 1):
+                wy = min(y1, sy + 1.0) - max(y0, float(sy))
+                if wy <= 0:
+                    continue
+                for sx in range(ix0, ix1 + 1):
+                    wx = min(x1, sx + 1.0) - max(x0, float(sx))
+                    if wx <= 0:
+                        continue
+                    w = wx * wy
+                    idx = (sy * sw + sx) * 4
+                    tr += src[idx] * w
+                    tg += src[idx + 1] * w
+                    tb += src[idx + 2] * w
+                    tw += w
+            di = (dy * dw + dx) * 4
+            out[di:di + 4] = bytes([min(255, int(tr / tw + 0.5)), min(255, int(tg / tw + 0.5)), min(255, int(tb / tw + 0.5)), 255])
+    return out
+
+
+def android_icons(res):
+    iw, ih, idata = read_png_rgba(ROOT / "port/launcher/icon-ios.png")
+    fg432 = bytearray(432 * 432 * 4)
+    start, span = 16.0 / 108.0, 76.0 / 108.0
+
+    def mirror(v, limit):
+        while v < 0 or v >= limit:
+            v = -v if v < 0 else 2 * limit - 1.001 - v
+        return v
+
+    for py in range(432):
+        sy = mirror(((py + 0.5) / 432 - start) / span * ih - 0.5, ih - 1)
+        iy, fy = int(sy), sy - int(sy)
+        for px in range(432):
+            sx = mirror(((px + 0.5) / 432 - start) / span * iw - 0.5, iw - 1)
+            ix, fx = int(sx), sx - int(sx)
+            rgb = []
+            for ch in range(3):
+                p00, p10 = idata[(iy * iw + ix) * 4 + ch], idata[(iy * iw + ix + 1) * 4 + ch]
+                p01, p11 = idata[((iy + 1) * iw + ix) * 4 + ch], idata[((iy + 1) * iw + ix + 1) * 4 + ch]
+                rgb.append(int((p00 * (1 - fx) + p10 * fx) * (1 - fy) + (p01 * (1 - fx) + p11 * fx) * fy + 0.5))
+            fg432[(py * 432 + px) * 4:(py * 432 + px) * 4 + 4] = bytes([rgb[0], rgb[1], rgb[2], 255])
+
+    viewport = bytearray(288 * 288 * 4)
+    for y in range(288):
+        viewport[y * 288 * 4:(y + 1) * 288 * 4] = fg432[((72 + y) * 432 + 72) * 4:((72 + y) * 432 + 360) * 4]
+
+    values = res / "values"
+    values.mkdir(parents=True, exist_ok=True)
+    (values / "colors.xml").write_text('<?xml version="1.0" encoding="utf-8"?>\n<resources><color name="icon_background">#1B8AB8</color></resources>\n', encoding="utf-8")
+    anydpi = res / "mipmap-anydpi-v26"
+    anydpi.mkdir(parents=True, exist_ok=True)
+    (anydpi / "icon.xml").write_text(ANDROID_ADAPTIVE_ICON, encoding="utf-8")
+    (anydpi / "icon_round.xml").write_text(ANDROID_ADAPTIVE_ICON, encoding="utf-8")
+
+    for density, legacy_px, adaptive_px in ANDROID_DENSITIES:
+        folder = res / f"mipmap-{density}"
+        write_png_rgba(folder / "icon_foreground.png", adaptive_px, adaptive_px, fg432 if adaptive_px == 432 else box_scale_rgba(fg432, 432, 432, adaptive_px, adaptive_px))
+        scaled = box_scale_rgba(viewport, 288, 288, legacy_px, legacy_px)
+        circled, rounded = bytearray(scaled), bytearray(scaled)
+        half = legacy_px / 2.0
+        for y in range(legacy_px):
+            dy = abs((y + 0.5) - half)
+            for x in range(legacy_px):
+                dx = abs((x + 0.5) - half)
+                cdist = math.hypot(dx, dy) - (half - 0.5)
+                circled[(y * legacy_px + x) * 4 + 3] = int(min(max(0.5 - cdist, 0.0), 1.0) * 255.0 + 0.5)
+                inner, corner = legacy_px * 14.0 / 64.0, legacy_px * 12.0 / 64.0
+                qx, qy = max(dx - inner, 0.0), max(dy - inner, 0.0)
+                rdist = math.hypot(qx, qy) + min(max(dx - inner, dy - inner), 0.0) - corner
+                rounded[(y * legacy_px + x) * 4 + 3] = int(min(max(0.5 - rdist, 0.0), 1.0) * 255.0 + 0.5)
+        write_png_rgba(folder / "icon_round.png", legacy_px, legacy_px, circled)
+        write_png_rgba(folder / "icon.png", legacy_px, legacy_px, rounded)
+
+
 def android(name):
     subprocess.run([sys.executable, "-I", str(ROOT / "tools/port.py"), "--android"], check=True)
     home, toolchain = android_home()
@@ -244,9 +397,7 @@ def android(name):
                     *map(str, sources)], check=True)
     subprocess.run([str(tools / "d8"), "--release", "--min-api", str(ANDROID_MINIMUM), "--lib", platform, "--output",
                     str(work), *map(str, sorted((work / "classes").rglob("*.class")))], check=True)
-    icons = work / "res" / "mipmap-xxxhdpi"
-    icons.mkdir(parents=True)
-    shutil.copyfile(ROOT / "port/launcher/icon.png", icons / "icon.png")
+    android_icons(work / "res")
     subprocess.run([str(tools / "aapt2"), "compile", "--dir", str(work / "res"), "-o", str(work / "res.zip")], check=True)
     assets = work / "assets"
     assets.mkdir()

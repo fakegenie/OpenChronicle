@@ -8,7 +8,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <application android:label="DC2" android:icon="@mipmap/icon" android:appCategory="game"
+    <application android:label="DC2" android:icon="@mipmap/icon" android:roundIcon="@mipmap/icon_round" android:appCategory="game"
         android:isGame="true" android:allowBackup="true" android:hardwareAccelerated="true"
         android:extractNativeLibs="false" android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
         <meta-data android:name="SDL_ENV.SDL_ANDROID_TRAP_BACK_BUTTON" android:value="1" />
