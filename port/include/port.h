@@ -25,6 +25,7 @@ constexpr int PORT_MENU_QUADWORDS = 2 * 200000;
 #undef size_t
 #pragma pop_macro("NULL")
 #pragma clang diagnostic pop
+static_assert(s8(-1) < 0);
 
 #include "common.h"
 #undef STATIC_ASSERT

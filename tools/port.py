@@ -73,7 +73,8 @@ WINDOWS_NAMES = set()
 UPSTREAM_ASM = ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp", "mg_drawprim_asm.cpp"]
 FLAGS = [
     "-O0", "-g", "-pthread", f"-ffile-prefix-map={ROOT}{os.sep}=", "-DPORT", "-DPAL",
-    "-fms-extensions", "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off",
+    # PS2 MWCC char is signed and types.h defines s8 as char; ARM64 ELF targets default char to unsigned
+    "-fsigned-char", "-fms-extensions", "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off",
     "-fno-strict-return", "-ftrivial-auto-var-init=zero",
     "-Wno-c++11-narrowing", "-Wno-register", "-Wno-return-mismatch", "-w",
     # MinGW lays bitfields out as MSVC does by default, and the engine's PS2 registers and save data need the GCC

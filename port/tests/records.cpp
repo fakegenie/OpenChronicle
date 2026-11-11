@@ -8,6 +8,7 @@ static_assert(sizeof(DATA_HEADER) == 12);
 static_assert(offsetof(DATA_HEADER, size) == 4);
 static_assert(offsetof(DATA_HEADER, sector) == 8);
 static_assert(sizeof(USER_PICTURE_INFO) == 0x18);
+static_assert(char(-1) < 0 && s8(-1) < 0);
 
 static unsigned char index_bytes[64];
 static char pixels[2][16];

@@ -40,8 +40,8 @@ def main():
     headers = temporary / "include"
     c_include = ["-Iport/include", "-I" + str(headers), "-I" + str(headers / "sce")]
     windows = ["-mno-ms-bitfields", "-D_FILE_OFFSET_BITS=64"] if WINDOWS else []
-    c_flags = ["clang", "-std=c11", "-pthread", "-Wall", "-Wextra", "-Werror", *(["-Wno-deprecated-declarations"] if DARWIN else []), *windows, *c_include, *sdk_cflags]
-    cpp_flags = ["clang++", "-std=c++26", "-pthread", "-O2", "-DPORT", "-DPAL", "-fms-extensions", "-w",
+    c_flags = ["clang", "-std=c11", "-pthread", "-fsigned-char", "-Wall", "-Wextra", "-Werror", *(["-Wno-deprecated-declarations"] if DARWIN else []), *windows, *c_include, *sdk_cflags]
+    cpp_flags = ["clang++", "-std=c++26", "-pthread", "-O2", "-DPORT", "-DPAL", "-fsigned-char", "-fms-extensions", "-w",
                  "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off", "-fno-strict-return",
                  "-ftrivial-auto-var-init=zero", *windows,
                  "-include", "port/include/port.h", *include]
