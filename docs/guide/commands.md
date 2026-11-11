@@ -30,13 +30,13 @@ The native build needs clang 21, binutils (llvm-objcopy and llvm-nm on macOS), P
 cmake, make and, on Linux, SDL's build dependencies), which takes precedence over `pkg-config`; `tools/port.py` copies
 their libraries into `build/port/lib` beside the binary. Run the binary with a disc image, `build/port/dc2 modded.iso`, to start
 the game straight away; it warns when the mounted disc's executable differs from the one used for
-the build. Run it without one to open the launcher, where the disc, window, widescreen, high frame
+the build. Run it without one to open the launcher, where the disc, save folder, window, widescreen, high frame
 rate, sound and, in the debug build, the debug panel are chosen, and built mods are turned on and
 off (see [Playing built mods](mods.md#playing-built-mods)). It keeps them in `launcher.cfg` in
 the user's settings folder (`~/Library/Application Support/DC2 Toolkit/DC2/` on macOS,
 `~/.local/share/DC2 Toolkit/DC2/` on Linux), and options given with it still win. Saves go in `saves` in that
-folder (or `DC2/saves` in iCloud Drive, when iCloud Drive has a `DC2` folder), unless
-`DC2_SAVE_ROOT` names another. Built mods go in `mods` and overrides in `overrides` beside the binary, or in the settings
+folder (or `DC2/saves` in iCloud Drive, when iCloud Drive has a `DC2` folder), unless the launcher's Saves row or
+`DC2_SAVE_ROOT` names another (right-click or press Left on the Saves row to go back to the default). Built mods go in `mods` and overrides in `overrides` beside the binary, or in the settings
 folder for `DC2.app`. For MPEG2 movies add `--movies` to the native build. Engine mods are checked with clang
 as well as MWCC by `mod check --native`.
 
@@ -58,8 +58,9 @@ or the newest in `ANDROID_HOME/ndk`), and `tools/port_package.py --android` pack
 `port/android` (the manifest, `DC2.java` and the key) into an APK, built with javac, d8, aapt2, zipalign and
 apksigner from the newest Android build tools, no Gradle. The engine compiles with clang 23 against the NDK's sysroot,
 as the NDK's own clang has no `#embed`, and the NDK's clang++ links. The app opens on the same launcher and settings as
-on iOS. Its Disc row opens Android's file picker and remembers the disc it picks, and the Mods page's Add a mod copies a
-picked `.dc2pak` into the mods folder. Saves, mods and `log.txt` (what the port prints) are in the app's folder,
+on iOS. Its Disc row opens Android's file picker and remembers the disc it picks, the Mods page's Add a mod copies a
+picked `.dc2pak` into the mods folder, and the Saves row picks any folder Android's folder picker reaches (or switches
+back to On this device). Saves (by default), mods and `log.txt` (what the port prints) are in the app's folder,
 `Android/data/dc2toolkit.dc2/files`; `launcher.cfg` is in its private storage. The launcher draws with SDL's
 Vulkan renderer, like the game. A state saved before an update does not load after it.
 

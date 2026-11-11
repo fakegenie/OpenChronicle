@@ -217,6 +217,7 @@ static const char *finish_message(void) {
     char path[1100];
     quick_path(path, sizeof path);
     if (port_state_write(&quick, path)) return "The state couldn't be written to the saves folder";
+    port_memory_card_changed();
     quick_stored = 1;
     return "State saved";
 }

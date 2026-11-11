@@ -2,6 +2,7 @@
 #include "cdvd.h"
 #include "executable.h"
 #include "icon.h"
+#include "memory_card.h"
 #include "port_mod.h"
 #include "port_overrides.h"
 #include <SDL3/SDL.h>
@@ -15,20 +16,20 @@
 
 #if TARGET_OS_IPHONE
 #include "ios_files.h"
-enum { DESKTOP = 0, SAVES_ITEM = 1 };
+enum { DESKTOP = 0, CAN_QUIT = 0 };
 #define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #define MODS_HINT_TOP "Put built mods (.dc2pak files) in the mods folder:"
 #define MODS_HINT_BOTTOM "Files, On My iPhone, DC2, mods."
 #define MODS_ACTION "Open mods folder"
 #elif defined(__ANDROID__)
 #include "android_files.h"
-enum { DESKTOP = 0, SAVES_ITEM = 0 };
+enum { DESKTOP = 0, CAN_QUIT = 1 };
 #define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #define MODS_HINT_TOP "Add built mods (.dc2pak files) from your files,"
 #define MODS_HINT_BOTTOM "or copy them to Android/data/.../files/mods."
 #define MODS_ACTION "Add a mod"
 #else
-enum { DESKTOP = 1, SAVES_ITEM = 0 };
+enum { DESKTOP = 1, CAN_QUIT = 1 };
 #define WINDOW_FLAGS (SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #define MODS_HINT_TOP "Built mods (.dc2pak files) go in the mods folder"
 #define MODS_HINT_BOTTOM "next to the game. Drop one here to add it."
@@ -38,14 +39,19 @@ enum { DESKTOP = 1, SAVES_ITEM = 0 };
 enum { CANVAS_WIDTH = 960, CANVAS_HEIGHT = 700, HERO_WIDTH = 520, PANEL_LEFT = 520, PANEL_WIDTH = 440, PAD = 48 };
 enum { OPTION_CHOICES = 14, OPTION_LIMIT = 16, PATH_SIZE = 1024, LINE_SIZE = 512 };
 enum { GLOW_SIZE = 64, WINDOW_RADIUS = 14 };
-enum { MENU_TOP = 225, MENU_STEP = 50 };
+#if TARGET_OS_IPHONE || defined(__ANDROID__)
+enum { MENU_PLAY, MENU_MODS, MENU_SETTINGS, MENU_DISC, MENU_SAVES, MENU_COUNT, MENU_QUIT = -1 };
+#else
+enum { MENU_PLAY, MENU_MODS, MENU_SETTINGS, MENU_DISC, MENU_SAVES, MENU_QUIT, MENU_COUNT };
+#endif
+enum { MENU_STEP = 50, MENU_TOP = (CANVAS_HEIGHT - MENU_COUNT * MENU_STEP) / 2 };
+enum { PICK_NONE, PICK_FILE, PICK_SAVES };
 enum { LARGEST_HEIGHT = 840, DRAG_START = 10, REVEAL_ABOVE = 60, REVEAL_BELOW = 50 };
 #define BODY_POINTS 20.0f
 enum { ROWS_TOP = 96, ROW_HEIGHT = 30, HEADING_HEIGHT = 28, TOGGLE_WIDTH = 34, TOGGLE_HEIGHT = 20 };
 enum { PAGE_MAIN, PAGE_SETTINGS, PAGE_MODS, PAGE_COUNT };
 enum { MOD_LIMIT = 32, MOD_ROWS = 7, MOD_TOP = 96, MOD_HEIGHT = 50, ENABLED_SIZE = 2048 };
 enum { DISC_NONE, DISC_GOOD, DISC_WRONG };
-enum { MENU_PLAY, MENU_MODS, MENU_SETTINGS, MENU_DISC, MENU_LAST, MENU_COUNT };
 enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_ACCEPT, KEY_BACK, KEY_PLAY };
 enum { STYLE_MENU, STYLE_BODY, STYLE_CAPTION, STYLE_SMALL, STYLE_BADGE, STYLE_COUNT };
 enum { SHAPE_ROW, SHAPE_PILL, SHAPE_RING, SHAPE_WINDOW, SHAPE_COUNT };
@@ -191,6 +197,8 @@ static float pointer_y = -1;
 static float page_mix[PAGE_COUNT] = {1};
 static float bar_middle = MENU_TOP + MENU_STEP / 2.0f;
 static float item_shift[MENU_COUNT];
+static char saves_path[PATH_SIZE];
+static char env_saves[PATH_SIZE];
 static char saves_name[LINE_SIZE];
 static float row_middle = ROWS_TOP;
 static float toggle_mix[OPTION_LIMIT];
@@ -252,6 +260,39 @@ static void file_name(const char *path, char *name, size_t size) {
     snprintf(name, size, "%s", base_name(path));
 }
 
+#if !TARGET_OS_IPHONE && !defined(__ANDROID__)
+static void trim_path(char *path) {
+    size_t len = strlen(path);
+    while (len > 1 && (path[len - 1] == '/' || path[len - 1] == '\\')) {
+        if (len == 3 && path[1] == ':') break;
+        path[--len] = 0;
+    }
+}
+#endif
+
+static void refresh_saves_name(void) {
+#if TARGET_OS_IPHONE
+    port_ios_saves_name(saves_name, sizeof saves_name);
+#elif defined(__ANDROID__)
+    saves_name[0] = 0;
+    if (saves_path[0]) file_name(saves_path, saves_name, sizeof saves_name);
+    if (!saves_name[0]) snprintf(saves_name, sizeof saves_name, "On this device");
+#else
+    const char *active = env_saves[0] ? env_saves : saves_path[0] ? saves_path : NULL;
+    if (active) {
+        char clean[PATH_SIZE];
+        snprintf(clean, sizeof clean, "%s", active);
+        trim_path(clean);
+        const char *leaf = base_name(clean);
+        snprintf(saves_name, sizeof saves_name, "%s",
+                 !strcmp(leaf, "com~apple~CloudDocs") ? "iCloud Drive" : *leaf ? leaf : clean);
+    } else {
+        snprintf(saves_name, sizeof saves_name, "%s",
+                 strstr(port_memory_card_default_root(), "com~apple~CloudDocs") ? "iCloud Drive" : "Default");
+    }
+#endif
+}
+
 static void read_options(void) {
     shown_count = 0;
     for (int index = 0; index < (int)SDL_arraysize(options); index++) {
@@ -265,11 +306,15 @@ static void read_options(void) {
         badge_mix[index] = (float)(option->experimental && option->chosen);
     }
     const char *disc = port_setting("disc");
+    const char *saves = port_setting("saves");
+    const char *override_saves = SDL_getenv("DC2_SAVE_ROOT");
     snprintf(disc_path, sizeof disc_path, "%s", disc ? disc : "");
+    snprintf(saves_path, sizeof saves_path, "%s", saves ? saves : "");
+    snprintf(env_saves, sizeof env_saves, "%s", override_saves ? override_saves : "");
 #if TARGET_OS_IPHONE
     port_ios_disc(disc_path, sizeof disc_path);
-    port_ios_saves_name(saves_name, sizeof saves_name);
 #endif
+    refresh_saves_name();
 }
 
 static void save_options(void) {
@@ -285,8 +330,9 @@ static void save_options(void) {
         if (mod_on[index]) snprintf(enabled + used, sizeof enabled - used, "%s%s", used ? "," : "", port_pak_text(index, "id"));
     }
     port_setting_set("disc", disc_path);
+    port_setting_set("saves", saves_path);
     port_setting_set("mods.enabled", enabled);
-    if (file) fprintf(file, "disc=%s\nmods.enabled=%s\n", disc_path, enabled);
+    if (file) fprintf(file, "disc=%s\nsaves=%s\nmods.enabled=%s\n", disc_path, saves_path, enabled);
     if (file) fclose(file);
     else fprintf(stderr, "launcher: cannot save %s\n", settings_path);
 }
@@ -495,7 +541,8 @@ static const char *menu_name(int item) {
     if (item == MENU_MODS) return "Mods";
     if (item == MENU_SETTINGS) return "Settings";
     if (item == MENU_DISC) return "Disc";
-    return SAVES_ITEM ? "Saves" : "Quit";
+    if (item == MENU_SAVES) return "Saves";
+    return "Quit";
 }
 
 static SDL_FRect menu_box(int item) {
@@ -572,7 +619,7 @@ static void draw_main(float now) {
     draw_value(MENU_MODS, mods_value, ink, alpha, shift);
     draw_value(MENU_DISC, disc_state == DISC_NONE ? "None" : disc_name, disc_state == DISC_WRONG ? bad : ink,
                alpha, shift);
-    if (SAVES_ITEM) draw_value(MENU_LAST, saves_name, ink, alpha, shift);
+    draw_value(MENU_SAVES, saves_name, ink, alpha, shift);
 }
 
 static void draw_switch(float mix, float right, float middle, float alpha, float focus) {
@@ -794,8 +841,10 @@ static void animate(float step) {
 #if TARGET_OS_IPHONE
 static void choose_saves(void) {
     port_ios_pick_saves(window);
-    port_ios_saves_name(saves_name, sizeof saves_name);
+    refresh_saves_name();
 }
+
+static void chosen_saves(const char *path) { (void)path; }
 
 static void choose_disc(void) {
     char path[PATH_SIZE] = "";
@@ -803,8 +852,6 @@ static void choose_disc(void) {
     if (path[0]) check_disc(path);
 }
 #else
-static void choose_saves(void) {}
-
 static void picked_file(void *data, const char *const *files, int filter) {
     (void)data;
     (void)filter;
@@ -813,10 +860,94 @@ static void picked_file(void *data, const char *const *files, int filter) {
     SDL_SetAtomicInt(&picked, 1);
 }
 
+#ifdef __ANDROID__
+static void android_picked(const char *path) {
+    snprintf(picked_path, sizeof picked_path, "%s", path ? path : "");
+    SDL_SetAtomicInt(&picked, 1);
+}
+
+static void choose_saves(void) {
+    if (choosing || SDL_GetWindowFlags(window) & SDL_WINDOW_HIDDEN) return;
+    choosing = PICK_SAVES;
+    port_android_pick_saves(saves_path[0] != 0, android_picked);
+}
+
+static void chosen_saves(const char *path) {
+    if (!path[0]) return;
+    if (!strcmp(path, "-")) saves_path[0] = 0;
+    else snprintf(saves_path, sizeof saves_path, "%s", path);
+    refresh_saves_name();
+}
+#else
+static int same_path(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = *a == '\\' ? '/' : *a;
+        char cb = *b == '\\' ? '/' : *b;
+#ifdef _WIN32
+        if (SDL_tolower((unsigned char)ca) != SDL_tolower((unsigned char)cb)) return 0;
+#else
+        if (ca != cb) return 0;
+#endif
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static int strip_tail(char *path, const char *leaf) {
+    char *slash = strrchr(path, '/');
+    char *backslash = strrchr(path, '\\');
+    if (backslash > slash) slash = backslash;
+    if (!slash || SDL_strcasecmp(slash + 1, leaf)) return 0;
+    *slash = 0;
+    return 1;
+}
+
+static int is_default_saves(const char *path) {
+    char def[PATH_SIZE];
+    snprintf(def, sizeof def, "%s", port_memory_card_default_root());
+    trim_path(def);
+    if (same_path(path, def)) return 1;
+    if (strip_tail(def, "saves") && same_path(path, def)) return 1;
+    if (strip_tail(def, "DC2") && same_path(path, def)) return 1;
+    return 0;
+}
+
+static void choose_saves(void) {
+    if (choosing || SDL_GetWindowFlags(window) & SDL_WINDOW_HIDDEN) return;
+    choosing = PICK_SAVES;
+    const char *current = env_saves[0] ? env_saves : saves_path[0] ? saves_path : port_memory_card_default_root();
+    SDL_CreateDirectory(current);
+    SDL_ShowOpenFolderDialog(picked_file, NULL, window, current, false);
+}
+
+static void chosen_saves(const char *path) {
+    if (!path[0]) return;
+    env_saves[0] = 0;
+    SDL_unsetenv_unsafe("DC2_SAVE_ROOT");
+    if (!strcmp(path, "-")) {
+        saves_path[0] = 0;
+    } else {
+        char clean[PATH_SIZE];
+        snprintf(clean, sizeof clean, "%s", path);
+        trim_path(clean);
+        if (is_default_saves(clean)) saves_path[0] = 0;
+        else snprintf(saves_path, sizeof saves_path, "%s", clean);
+    }
+    refresh_saves_name();
+}
+#endif
+
 static void choose_file(const SDL_DialogFileFilter *filter, const char *start) {
     if (choosing || SDL_GetWindowFlags(window) & SDL_WINDOW_HIDDEN) return;
-    choosing = 1;
+    choosing = PICK_FILE;
+#ifdef __ANDROID__
+    (void)filter;
+    (void)start;
+    SDL_ShowOpenFileDialog(picked_file, NULL, window, NULL, 0, NULL, false);
+#else
     SDL_ShowOpenFileDialog(picked_file, NULL, window, filter, 1, start, false);
+#endif
 }
 
 static void choose_disc(void) {
@@ -885,8 +1016,8 @@ static void activate_main(int item, float now) {
     if (item == MENU_MODS) open_mods();
     if (item == MENU_SETTINGS) open_settings();
     if (item == MENU_DISC) choose_disc();
-    if (item == MENU_LAST && !SAVES_ITEM) leave(0, now);
-    if (item == MENU_LAST && SAVES_ITEM) choose_saves();
+    if (item == MENU_SAVES) choose_saves();
+    if (item == MENU_QUIT) leave(0, now);
 }
 
 static void press(int key, float now) {
@@ -894,8 +1025,9 @@ static void press(int key, float now) {
     if (page == PAGE_MAIN) {
         if (key == KEY_UP) menu_selected = (menu_selected + MENU_COUNT - 1) % MENU_COUNT;
         if (key == KEY_DOWN) menu_selected = (menu_selected + 1) % MENU_COUNT;
+        if (key == KEY_LEFT && DESKTOP && menu_selected == MENU_SAVES) chosen_saves("-");
         if (key == KEY_ACCEPT) activate_main(menu_selected, now);
-        if (key == KEY_BACK && DESKTOP) leave(0, now);
+        if (key == KEY_BACK && CAN_QUIT) leave(0, now);
         return;
     }
     if (page == PAGE_MODS) {
@@ -981,6 +1113,7 @@ static void click_row(int row, float x) {
 
 static void click(float x, float y, int backwards, float now) {
     if (DESKTOP && inside(close_box(), x, y)) leave(0, now);
+    else if (DESKTOP && backwards && menu_item_at(x, y) == MENU_SAVES) chosen_saves("-");
     else if (menu_item_at(x, y) >= 0) activate_main(menu_item_at(x, y), now);
     else if (page != PAGE_MAIN && inside(back_box(), x, y)) page = PAGE_MAIN;
     else if (mod_at(x, y) >= 0) toggle_mod(mod_selected = mod_at(x, y));
@@ -1013,6 +1146,33 @@ static void read_mods(void) {
     }
 }
 
+static int copy_stream_file(const char *source, const char *target) {
+    SDL_IOStream *in = SDL_IOFromFile(source, "rb");
+    if (!in) return 0;
+    SDL_IOStream *out = SDL_IOFromFile(target, "wb");
+    if (!out) {
+        SDL_CloseIO(in);
+        return 0;
+    }
+    unsigned char chunk[65536];
+    int ok = 1;
+    for (;;) {
+        size_t got = SDL_ReadIO(in, chunk, sizeof chunk);
+        if (!got) {
+            ok = SDL_GetIOStatus(in) == SDL_IO_STATUS_EOF;
+            break;
+        }
+        if (SDL_WriteIO(out, chunk, got) != got) {
+            ok = 0;
+            break;
+        }
+    }
+    SDL_CloseIO(in);
+    if (!SDL_CloseIO(out)) ok = 0;
+    if (!ok) SDL_RemovePath(target);
+    return ok;
+}
+
 static void dropped(const char *path) {
     char name[PATH_SIZE], target[PATH_SIZE * 2];
     file_name(path, name, sizeof name);
@@ -1029,7 +1189,7 @@ static void dropped(const char *path) {
         was[index] = mod_on[index];
         snprintf(ids[index], sizeof ids[index], "%s", port_pak_text(index, "id"));
     }
-    if (!SDL_CopyFile(path, target)) {
+    if (!copy_stream_file(path, target)) {
         fprintf(stderr, "launcher: cannot copy %s: %s\n", path, SDL_GetError());
         return;
     }
@@ -1132,9 +1292,11 @@ static void fit_view(void) {
 }
 
 static int open_window(int hidden) {
-    float zoom = window_zoom();
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    float zoom = DESKTOP ? window_zoom() : 0;
     SDL_WindowFlags flags = WINDOW_FLAGS | (hidden ? SDL_WINDOW_HIDDEN : 0);
-    if (!SDL_CreateWindowAndRenderer("DC2", (int)(CANVAS_WIDTH * zoom), (int)(CANVAS_HEIGHT * zoom), flags,
+    if (!SDL_CreateWindowAndRenderer("DC2", DESKTOP ? (int)(CANVAS_WIDTH * zoom) : 0,
+                                     DESKTOP ? (int)(CANVAS_HEIGHT * zoom) : 0, flags,
                                      &window, &renderer)) {
         fprintf(stderr, "launcher: %s\n", SDL_GetError());
         return 0;
@@ -1235,12 +1397,22 @@ int port_launcher(void) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_RENDER_DEVICE_RESET) remake_textures();
+            if (!DESKTOP && (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
+                fit_view();
+                SDL_SetRenderLogicalPresentation(renderer, (int)view_width, (int)view_height, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                remake_textures();
+            }
+            if (!DESKTOP && event.type == SDL_EVENT_DID_ENTER_FOREGROUND && disc_state != DISC_GOOD && disc_path[0])
+                check_disc(disc_path);
             handle(&event, now);
         }
         if (SDL_GetAtomicInt(&picked)) {
+            int kind = choosing;
             SDL_SetAtomicInt(&picked, 0);
-            choosing = 0;
-            if (picked_path[0]) dropped(picked_path);
+            choosing = PICK_NONE;
+            if (kind == PICK_SAVES) chosen_saves(picked_path);
+            else if (picked_path[0]) dropped(picked_path);
+            if (!DESKTOP && !picture) save_options();
         }
         animate(step);
         draw(now);
@@ -1248,7 +1420,6 @@ int port_launcher(void) {
     }
     close_window();
     SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
-    if (!playing) return 0;
-    save_options();
-    return 1;
+    if (!picture) save_options();
+    return playing;
 }

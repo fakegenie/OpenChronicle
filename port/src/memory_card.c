@@ -47,6 +47,7 @@ enum {
 static int cards[MC_PORTS] = {-1, -1};
 static char directories[MC_PORTS][MC_PATH_SIZE];
 static int files[MC_FILES];
+static unsigned char writable[MC_FILES];
 static int owners[MC_FILES];
 static int initialized;
 static int pending;
@@ -55,6 +56,19 @@ static int last_result;
 static DIR *listing;
 static char pattern[MC_NAME_SIZE];
 static int listing_port = -1;
+static void (*watch_changed)(void);
+
+void port_memory_card_watch(void (*changed)(void)) { watch_changed = changed; }
+
+void port_memory_card_changed(void) {
+    if (watch_changed) watch_changed();
+}
+
+static int any_writable_open(void) {
+    for (int i = 0; i < MC_FILES; ++i)
+        if (initialized && files[i] >= 0 && writable[i]) return 1;
+    return 0;
+}
 
 static int error_result(void) {
     if (errno == ENOENT || errno == ENOTDIR || errno == EEXIST) return sceMcResNoEntry;
@@ -73,6 +87,7 @@ int sceMcEnd(void) {
     for (int i = 0; i < MC_FILES; ++i) {
         if (initialized && files[i] >= 0) close(files[i]);
         files[i] = NO_FILE;
+        writable[i] = 0;
     }
     for (int i = 0; i < MC_PORTS; ++i) {
         if (cards[i] >= 0) close(cards[i]);
@@ -87,7 +102,7 @@ int sceMcEnd(void) {
 int port_memory_card_init(const char *root) {
     sceMcEnd();
     if (!root || !root[0]) return sceMcIniErrKernel;
-    if (mkdir(root, S_IRWXU) && errno != EEXIST) return sceMcIniErrKernel;
+    if (!SDL_CreateDirectory(root)) return sceMcIniErrKernel;
     int base = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (base < 0) return sceMcIniErrKernel;
     for (int i = 0; i < MC_PORTS; ++i) {
@@ -102,7 +117,7 @@ int port_memory_card_init(const char *root) {
     return cards[0] >= 0 ? sceMcIniSucceed : sceMcIniErrKernel;
 }
 
-static const char *default_root(void) {
+const char *port_memory_card_default_root(void) {
     static char path[MC_PATH_SIZE];
     if (path[0]) return path;
     const char *home = getenv("HOME");
@@ -121,7 +136,96 @@ static const char *default_root(void) {
 const char *port_memory_card_root(void) {
     // SDL's copy of the environment, which the debug build's recordings set it in
     const char *root = SDL_getenv("DC2_SAVE_ROOT");
-    return root && root[0] ? root : default_root();
+    return root && root[0] ? root : port_memory_card_default_root();
+}
+
+static void trim_separators(char *path) {
+    size_t len = strlen(path);
+    while (len > 1 && (path[len - 1] == '/' || path[len - 1] == '\\')) {
+        if (len == 3 && path[1] == ':') break;
+        path[--len] = 0;
+    }
+}
+
+static const char *leaf_of(const char *path) {
+    const char *slash = strrchr(path, '/');
+    const char *backslash = strrchr(path, '\\');
+    if (backslash > slash) slash = backslash;
+    return slash ? slash + 1 : path;
+}
+
+static int path_exists(const char *folder, const char *child, SDL_PathType wanted) {
+    char full[MC_PATH_SIZE * 2];
+    SDL_PathInfo info;
+    snprintf(full, sizeof full, "%s/%s", folder, child);
+    return SDL_GetPathInfo(full, &info) && (wanted == SDL_PATHTYPE_NONE || info.type == wanted);
+}
+
+static SDL_EnumerationResult check_non_empty(void *userdata, const char *dirname, const char *fname) {
+    (void)dirname;
+    if (!strcmp(fname, ".") || !strcmp(fname, "..")) return SDL_ENUM_CONTINUE;
+    *(int *)userdata = 1;
+    return SDL_ENUM_SUCCESS;
+}
+
+static int has_saves(const char *folder) {
+    if (path_exists(folder, "quick.dc2state", SDL_PATHTYPE_FILE)) return 1;
+    for (int i = 0; i < MC_PORTS; ++i) {
+        char card[MC_PATH_SIZE * 2];
+        int found = 0;
+        snprintf(card, sizeof card, "%s/card%d", folder, i);
+        SDL_EnumerateDirectory(card, check_non_empty, &found);
+        if (found) return 1;
+    }
+    return 0;
+}
+
+static SDL_EnumerationResult copy_entry(void *userdata, const char *dirname, const char *fname) {
+    if (!strcmp(fname, ".") || !strcmp(fname, "..")) return SDL_ENUM_CONTINUE;
+    const char *target_dir = (const char *)userdata;
+    char source[MC_PATH_SIZE * 2], target[MC_PATH_SIZE * 2];
+    SDL_PathInfo info;
+    snprintf(source, sizeof source, "%s%s", dirname, fname);
+    snprintf(target, sizeof target, "%s/%s", target_dir, fname);
+    if (!SDL_GetPathInfo(source, &info)) return SDL_ENUM_CONTINUE;
+    if (info.type == SDL_PATHTYPE_DIRECTORY) {
+        SDL_CreateDirectory(target);
+        SDL_EnumerateDirectory(source, copy_entry, target);
+    } else if (info.type == SDL_PATHTYPE_FILE) {
+        SDL_CopyFile(source, target);
+    }
+    return SDL_ENUM_CONTINUE;
+}
+
+static int is_subpath(const char *parent, const char *child) {
+    size_t len = strlen(parent);
+    return !strncmp(parent, child, len) && (child[len] == '/' || child[len] == '\\');
+}
+
+void port_memory_card_choose_root(const char *chosen) {
+    if (!chosen || !chosen[0]) return;
+    char trimmed[MC_PATH_SIZE], saves[MC_PATH_SIZE];
+    snprintf(trimmed, sizeof trimmed, "%s", chosen);
+    trim_separators(trimmed);
+    if (!trimmed[0]) return;
+    const char *leaf = leaf_of(trimmed);
+    if (path_exists(trimmed, "card0", SDL_PATHTYPE_DIRECTORY) ||
+        path_exists(trimmed, "card1", SDL_PATHTYPE_DIRECTORY) ||
+        path_exists(trimmed, "quick.dc2state", SDL_PATHTYPE_FILE) ||
+        !SDL_strcasecmp(leaf, "saves")) {
+        snprintf(saves, sizeof saves, "%s", trimmed);
+    } else if (path_exists(trimmed, "saves", SDL_PATHTYPE_DIRECTORY) || !SDL_strcasecmp(leaf, "DC2")) {
+        snprintf(saves, sizeof saves, "%s/saves", trimmed);
+    } else {
+        snprintf(saves, sizeof saves, "%s/DC2/saves", trimmed);
+    }
+    const char *local = port_memory_card_default_root();
+    if (strcmp(local, saves) && !is_subpath(local, saves) && !has_saves(saves) && has_saves(local)) {
+        SDL_CreateDirectory(saves);
+        SDL_EnumerateDirectory(local, copy_entry, saves);
+    }
+    SDL_CreateDirectory(saves);
+    SDL_setenv_unsafe("DC2_SAVE_ROOT", saves, 1);
 }
 
 int sceMcInit(void) {
@@ -242,6 +346,7 @@ int sceMcOpen(int port, int slot, const char *name, int flags) {
         struct stat status;
         if (fstat(fd, &status) || !S_ISREG(status.st_mode)) { close(fd); return 0; }
         files[i] = fd;
+        writable[i] = mode != SCE_RDONLY;
         owners[i] = port;
         last_result = i;
         return 0;
@@ -259,8 +364,11 @@ static int file_request(int command, int fd) {
 int sceMcClose(int fd) {
     int status = file_request(sceMcFuncNoClose, fd);
     if (status) return status == PORT_MC_BUSY ? PORT_MC_BUSY : 0;
+    int was_writable = writable[fd];
     last_result = close(files[fd]) ? error_result() : sceMcResSucceed;
     files[fd] = NO_FILE;
+    writable[fd] = 0;
+    if (was_writable && last_result == sceMcResSucceed && !any_writable_open()) port_memory_card_changed();
     return 0;
 }
 
@@ -296,6 +404,7 @@ int sceMcFlush(int fd) {
     int status = file_request(sceMcFuncNoFlush, fd);
     if (status) return status == PORT_MC_BUSY ? PORT_MC_BUSY : 0;
     last_result = fsync(files[fd]) ? error_result() : sceMcResSucceed;
+    if (writable[fd] && last_result == sceMcResSucceed) port_memory_card_changed();
     return 0;
 }
 
@@ -306,6 +415,7 @@ int sceMcMkdir(int port, int slot, const char *name) {
     if (parent < 0) return 0;
     last_result = mkdirat(parent, leaf, S_IRWXU) ? error_result() : sceMcResSucceed;
     close(parent);
+    if (last_result == sceMcResSucceed && !any_writable_open()) port_memory_card_changed();
     return 0;
 }
 
@@ -407,6 +517,7 @@ int sceMcRename(int port, int slot, char *old_name, char *new_name) {
     else last_result = renameat(old_parent, old_leaf, new_parent, new_leaf) ? error_result() : sceMcResSucceed;
     close(old_parent);
     close(new_parent);
+    if (last_result == sceMcResSucceed && !any_writable_open()) port_memory_card_changed();
     return 0;
 }
 
@@ -419,6 +530,7 @@ int sceMcDelete(int port, int slot, char *name) {
     if (fstatat(parent, leaf, &info, AT_SYMLINK_NOFOLLOW)) last_result = error_result();
     else last_result = unlinkat(parent, leaf, S_ISDIR(info.st_mode) ? AT_REMOVEDIR : 0) ? error_result() : sceMcResSucceed;
     close(parent);
+    if (last_result == sceMcResSucceed && !any_writable_open()) port_memory_card_changed();
     return 0;
 }
 
@@ -452,7 +564,7 @@ static int format_card(int command, int port, int slot) {
     if (last_result == sceMcResFailDetect) return 0;
     close_listing();
     for (int i = 0; i < MC_FILES; ++i) {
-        if (files[i] >= 0 && owners[i] == port) { close(files[i]); files[i] = NO_FILE; }
+        if (files[i] >= 0 && owners[i] == port) { close(files[i]); files[i] = NO_FILE; writable[i] = 0; }
     }
     directories[port][0] = 0;
     last_result = clear_directory(cards[port]) ? error_result() : sceMcResSucceed;
@@ -461,6 +573,7 @@ static int format_card(int command, int port, int slot) {
         if (marker < 0) last_result = error_result();
         else close(marker);
     }
+    if (last_result == sceMcResSucceed && !any_writable_open()) port_memory_card_changed();
     return 0;
 }
 

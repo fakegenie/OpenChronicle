@@ -498,13 +498,24 @@ const uint32_t *port_state_thumbnail(const PortState *state) {
 
 const char *port_state_write(const PortState *state, const char *path) {
     static char failure[600];
-    FILE *file = fopen(path, "wb");
+    char temporary[1200];
+    snprintf(temporary, sizeof temporary, "%s.tmp", path);
+    FILE *file = fopen(temporary, "wb");
     if (!file) {
         snprintf(failure, sizeof failure, "cannot write %s", path);
         return failure;
     }
     size_t written = fwrite(state->data, 1, state->size, file);
     if (fclose(file) || written != state->size) {
+        remove(temporary);
+        snprintf(failure, sizeof failure, "cannot write %s", path);
+        return failure;
+    }
+#ifdef _WIN32
+    remove(path);
+#endif
+    if (rename(temporary, path)) {
+        remove(temporary);
         snprintf(failure, sizeof failure, "cannot write %s", path);
         return failure;
     }

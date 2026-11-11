@@ -23,8 +23,10 @@ enum { SCALE_LIMIT = 4, SAMPLE_LIMIT = 8, WIDEN_LIMIT = 1024 };
 #define MODEL_BYTES ((Uint32)(MODEL_LIMIT * sizeof(MeshUniforms)))
 #define BONE_BYTES ((Uint32)(BONE_LIMIT * RENDER_BONE_SLOTS * sizeof(RenderBone)))
 #if defined(SDL_PLATFORM_IOS) || defined(SDL_PLATFORM_ANDROID)
+enum { MOBILE = 1 };
 #define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #else
+enum { MOBILE = 0 };
 #define WINDOW_FLAGS (SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #endif
 
@@ -420,7 +422,7 @@ static int auto_scale;
 static int frame_width = LAYOUT_WIDTH;
 static int window_width = WINDOW_WIDTH;
 static int window_height = WINDOW_HEIGHT;
-static int fullscreen;
+static int fullscreen = MOBILE;
 static int vsync;
 static int nearest;
 static int background;
@@ -646,6 +648,7 @@ static int free_slot(void) {
 }
 
 int render_init(void) {
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) render_error("video");
     device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_SPIRV, 0, NULL);
     if (!device) render_error("device");
@@ -654,7 +657,7 @@ int render_init(void) {
     wake_event = SDL_RegisterEvents(1);
     timed_ready = SDL_CreateCondition();
     timer = SDL_CreateThread(time_fences, "gpu timer", NULL);
-    window = SDL_CreateWindow("DC2", window_width, window_height,
+    window = SDL_CreateWindow("DC2", MOBILE ? 0 : window_width, MOBILE ? 0 : window_height,
                               WINDOW_FLAGS | (fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
     screens[SCREEN_GAME].window = window;
@@ -2430,6 +2433,7 @@ static void SDLCALL apply_fullscreen(void *unused) {
 }
 
 void render_set_window(int width, int height, int full) {
+    if (MOBILE) return;
     if (width > 0 && height > 0) {
         window_width = width;
         window_height = height;
@@ -2455,7 +2459,7 @@ void render_set_aspect(int numerator, int denominator) {
 int render_frame_width(void) { return frame_width; }
 
 void render_toggle_fullscreen(void) {
-    render_set_window(0, 0, !fullscreen);
+    if (!MOBILE) render_set_window(0, 0, !fullscreen);
 }
 
 static void SDLCALL apply_vsync(void *unused) {
@@ -2694,6 +2698,8 @@ static void show_screen(int which) {
         buffer = NULL;
     }
     if (buffer && swapchain && which == SCREEN_GAME) {
+        if (fill_screen && window_width > 0 && window_height > 0)
+            render_set_aspect(SDL_max((int)window_width, (int)window_height), SDL_min((int)window_width, (int)window_height));
         fit_texture(buffer, swapchain, window_width, window_height, color, scale, width, height);
         draw_touch(buffer, swapchain, SDL_GetGPUSwapchainTextureFormat(device, target), window_width, window_height, count);
     }

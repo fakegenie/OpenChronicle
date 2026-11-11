@@ -40,9 +40,9 @@ A controller works as a DualShock 2. On the keyboard:
 | Settings (`launcher.cfg`) | `~/Library/Application Support/DC2 Toolkit/DC2` | `~/.local/share/DC2 Toolkit/DC2` | `%APPDATA%\DC2 Toolkit\DC2` |
 | Mods (`.dc2pak`) | `mods` in the settings folder | `mods` beside `dc2` | `mods` beside `DC2.exe` |
 
-Each memory card is a folder, `card0` and `card1`, in the saves folder. Set `DC2_SAVE_ROOT` to keep saves somewhere
-else. Mods built with `dc2tk mod build` go in the mods folder, or drop one on the launcher, and its Mods page turns each
-one on and off.
+Each memory card is a folder, `card0` and `card1`, in the saves folder. Choose another folder in the launcher's Saves
+row (right-click or press Left on it to go back to the default), or set `DC2_SAVE_ROOT`. Mods built with `dc2tk mod build`
+go in the mods folder, or drop one on the launcher, and its Mods page turns each one on and off.
 
 ## Licences
 

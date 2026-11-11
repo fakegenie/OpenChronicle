@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { MOD_LIMIT = 32, SETTING_LIMIT = 256, SETTING_TEXT = 256, COMMAND_LIMIT = 64, PANEL_LIMIT = 32 };
+enum { MOD_LIMIT = 32, SETTING_LIMIT = 256, SETTING_NAME = 128, SETTING_TEXT = 2048, COMMAND_LIMIT = 64, PANEL_LIMIT = 32 };
 
 static const PortMod *mods[MOD_LIMIT];
 static int mod_count;
@@ -15,7 +15,7 @@ static int command_count;
 static const char *panel_names[PANEL_LIMIT];
 static PortPanelDraw panel_draws[PANEL_LIMIT];
 static int panel_count;
-static char setting_names[SETTING_LIMIT][SETTING_TEXT];
+static char setting_names[SETTING_LIMIT][SETTING_NAME];
 static char setting_values[SETTING_LIMIT][SETTING_TEXT];
 static int setting_count;
 static int settings_read;
@@ -33,13 +33,13 @@ int port_mod_loaded(const char *id) {
 static void read_file(const char *path) {
     FILE *file = fopen(path, "r");
     if (!file) return;
-    char line[SETTING_TEXT * 2];
+    char line[SETTING_NAME + SETTING_TEXT];
     while (setting_count < SETTING_LIMIT && fgets(line, sizeof line, file)) {
         line[strcspn(line, "\r\n")] = 0;
         char *equals = strchr(line, '=');
         if (!equals || line[0] == '#') continue;
         *equals = 0;
-        snprintf(setting_names[setting_count], SETTING_TEXT, "%s", line);
+        snprintf(setting_names[setting_count], SETTING_NAME, "%s", line);
         snprintf(setting_values[setting_count], SETTING_TEXT, "%s", equals + 1);
         setting_count++;
     }
@@ -55,7 +55,7 @@ static void read_settings(void) {
 
 void port_settings_beneath(const char *text) {
     if (!settings_read) read_settings();
-    char line[SETTING_TEXT * 2];
+    char line[SETTING_NAME + SETTING_TEXT];
     for (const char *at = text; *at && setting_count < SETTING_LIMIT;) {
         size_t length = strcspn(at, "\r\n");
         snprintf(line, sizeof line, "%.*s", (int)length, at);
@@ -66,7 +66,7 @@ void port_settings_beneath(const char *text) {
         *equals = 0;
         memmove(setting_names + 1, setting_names, sizeof setting_names[0] * (size_t)setting_count);
         memmove(setting_values + 1, setting_values, sizeof setting_values[0] * (size_t)setting_count);
-        snprintf(setting_names[0], SETTING_TEXT, "%s", line);
+        snprintf(setting_names[0], SETTING_NAME, "%s", line);
         snprintf(setting_values[0], SETTING_TEXT, "%s", equals + 1);
         setting_count++;
     }
@@ -92,7 +92,7 @@ void port_setting_set(const char *name, const char *value) {
             return;
         }
     if (setting_count == SETTING_LIMIT) return;
-    snprintf(setting_names[setting_count], SETTING_TEXT, "%s", name);
+    snprintf(setting_names[setting_count], SETTING_NAME, "%s", name);
     snprintf(setting_values[setting_count], SETTING_TEXT, "%s", value);
     setting_count++;
 }

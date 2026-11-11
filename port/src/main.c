@@ -8,6 +8,7 @@
 #include "port_overrides.h"
 #include "render.h"
 #include "launcher.h"
+#include "memory_card.h"
 #include "touch.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,11 +52,13 @@ static void enter_documents(void) {
     dup2(fileno(stderr), fileno(stdout));
 }
 
-static void find_saves(void) { port_android_saves(); }
+static void find_saves(void) { port_android_saves(port_setting("saves")); }
 static int touch_default(void) { return TOUCH_SMART; }
 #else
 static void enter_documents(void) {}
-static void find_saves(void) {}
+static void find_saves(void) {
+    if (!SDL_getenv("DC2_SAVE_ROOT")) port_memory_card_choose_root(port_setting("saves"));
+}
 static int touch_default(void) { return TOUCH_OFF; }
 #endif
 
