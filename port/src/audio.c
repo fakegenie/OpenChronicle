@@ -16,6 +16,7 @@
 
 static SDL_AudioStream *audio;
 #endif
+static int audio_muted;
 
 enum { MOVIE_PCM_FRAMES = 4 * AUDIO_RATE, STREAM_SAMPLE_BITS = 16 };
 enum { SOUND_INDEX_LIMIT = 1024 * 1024, STREAM_SIZE_LIMIT = 64 * 1024 * 1024 };
@@ -210,6 +211,7 @@ void audio_render(int16_t *output, size_t frames) {
 
 int audio_init(int enabled) {
     audio_reset();
+    audio_muted = !enabled;
 #ifdef PORT_GRAPHICS
     SDL_AudioSpec spec = {.format = SDL_AUDIO_S16, .channels = 2, .freq = AUDIO_RATE};
     if (SDL_InitSubSystem(SDL_INIT_AUDIO)) audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
@@ -223,6 +225,30 @@ int audio_init(int enabled) {
 #endif
     return 1;
 }
+
+void audio_set_paused(int paused) {
+#ifdef PORT_GRAPHICS
+    if (!audio) return;
+    if (paused) SDL_PauseAudioStreamDevice(audio);
+    else SDL_ResumeAudioStreamDevice(audio);
+#else
+    (void)paused;
+#endif
+}
+
+void audio_set_muted(int muted) {
+    audio_muted = muted != 0;
+#ifdef PORT_GRAPHICS
+    if (!audio && !audio_muted) {
+        SDL_AudioSpec spec = {.format = SDL_AUDIO_S16, .channels = 2, .freq = AUDIO_RATE};
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO)) audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+        if (audio) SDL_ResumeAudioStreamDevice(audio);
+    }
+    if (audio) SDL_SetAudioStreamGain(audio, audio_muted ? 0.0f : 1.0f);
+#endif
+}
+
+int audio_is_muted(void) { return audio_muted; }
 
 void audio_frame(void) {
     int16_t samples[AUDIO_FRAMES_PER_FIELD * 2];

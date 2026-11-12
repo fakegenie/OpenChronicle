@@ -67,7 +67,7 @@ POSITION = [] if DARWIN or WINDOWS else ["-fno-pie", "-fno-pic"]
 ANDROID_API = 29
 TOOLCHAIN = ROOT / "build" / "port" / "llvm-mingw"
 # the import libraries clang's MinGW driver links, and the names they define (windows_names)
-WINDOWS_IMPORTS = ["gdi32", "comdlg32", "advapi32", "shell32", "user32", "kernel32"]
+WINDOWS_IMPORTS = ["gdi32", "comdlg32", "advapi32", "shell32", "user32", "kernel32", "iphlpapi"]
 WINDOWS_NAMES = set()
 
 UPSTREAM_ASM = ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp", "mg_drawprim_asm.cpp"]
@@ -84,7 +84,7 @@ FLAGS = [
 LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN
                             # a fixed image base, as the non-PIE Linux build has; -mwindows opens no console
                             else ["-static", "-mwindows", "-Wl,--disable-dynamicbase", "-Wl,--disable-high-entropy-va",
-                                  "-lws2_32"]
+                                  "-lws2_32", "-liphlpapi"]
                             if WINDOWS else ["-no-pie", "-static-libstdc++", "-static-libgcc"])]
 RPATHS = ["@executable_path/lib", "@executable_path/../Frameworks"] if DARWIN else [] if WINDOWS else ["$ORIGIN/lib"]
 IOS = {
@@ -302,7 +302,7 @@ def compile_one(source, name):
                *(["-O2"] if not source.is_relative_to(COPY) and source.name not in ("memory.c", "kernel.c") else []),
                "-MMD", "-MF", str(depfile),
                *([] if c else ["-include", str(PORT / "include" / "port.h")]),
-               f"-I{PORT / 'include'}", f"-I{COPY / 'ps2' / 'include'}", f"-I{COPY / 'ps2' / 'include' / 'sce'}",
+               f"-I{PORT / 'include'}", f"-I{PORT / 'third_party' / 'port-helpers'}", f"-I{COPY / 'ps2' / 'include'}", f"-I{COPY / 'ps2' / 'include' / 'sce'}",
                *([f"-I{ENGINE / 'port' / 'include'}"] if name.startswith("upstream_") else []),
                f"-I{ENGINE / 'port' / 'src'}", str(source), "-o", str(target)]
     # llvm-objcopy cannot localise or weaken COFF symbols: a local symbol is renamed to one nothing else names, and link

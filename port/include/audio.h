@@ -37,6 +37,9 @@ struct wav_fmt {
 _Static_assert(sizeof(struct wav_fmt) == 16, "WAVE fmt chunk");
 
 int audio_init(int enabled);
+void audio_set_paused(int paused);
+void audio_set_muted(int muted);
+int audio_is_muted(void);
 void audio_shutdown(void);
 void audio_frame(void);
 void audio_render(int16_t *output, size_t frames);

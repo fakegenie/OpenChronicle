@@ -10,6 +10,19 @@
 enum { TRIGGER_PRESS = 4096, AXIS_STEP = 256 };
 
 static struct port_input_state input;
+static uint16_t suppressed_buttons;
+
+uint16_t port_input_filter_buttons(uint16_t raw, uint16_t *suppressed) {
+    uint16_t chord = PORT_INPUT_START | PORT_INPUT_SELECT;
+    if ((raw & chord) == chord) *suppressed |= chord;
+    *suppressed &= raw;
+    return (uint16_t)(raw & ~(*suppressed));
+}
+
+void port_input_suppress_held(void) {
+    suppressed_buttons = UINT16_MAX;
+    memset(&input, 0, sizeof(input));
+}
 
 unsigned char port_input_axis(int value) {
     if (value < INT16_MIN) value = INT16_MIN;
@@ -77,6 +90,7 @@ static int initialized;
 int port_input_init(void) {
     if (initialized) return 1;
     memset(&input, 0, sizeof(input));
+    suppressed_buttons = 0;
     initialized = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
     return initialized;
 }
@@ -85,6 +99,7 @@ void port_input_close(void) {
     if (gamepad) SDL_CloseGamepad(gamepad);
     gamepad = NULL;
     memset(&input, 0, sizeof(input));
+    suppressed_buttons = 0;
     if (initialized) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
     initialized = 0;
 }
@@ -151,15 +166,18 @@ void port_input_poll(void) {
     if (!initialized) return;
     read_devices();
     port_touch_read(&input);
+    input.buttons = port_input_filter_buttons(input.buttons, &suppressed_buttons);
 }
 #else
 int port_input_init(void) {
     memset(&input, 0, sizeof(input));
+    suppressed_buttons = 0;
     return 1;
 }
 
 void port_input_close(void) {
     memset(&input, 0, sizeof(input));
+    suppressed_buttons = 0;
 }
 
 void port_input_poll(void) {}

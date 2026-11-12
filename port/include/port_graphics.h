@@ -16,6 +16,7 @@ extern size_t port_field_script_next;
 extern uint64_t port_field_script_base;
 void port_graphics_tick(void);
 void port_graphics_wait(void);
+void port_graphics_resumed(void);
 void port_timer_reset(void);
 uint32_t port_timer_lines(void);
 int port_display_field(void);

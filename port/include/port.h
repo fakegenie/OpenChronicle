@@ -1,6 +1,10 @@
 #pragma once
 #include <cstddef>
+#if __has_include(<__new/placement_new_delete.h>)
+#include <__new/placement_new_delete.h>
+#else
 #include <new>
+#endif
 #include <strings.h>
 #include "port_game.h"
 #include <sys/types.h>

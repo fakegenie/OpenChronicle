@@ -51,6 +51,12 @@ void main() {
         out_color = vec4(frag_color.rgb, frag_color.a * texture(atlas, frag_uv).a);
         return;
     }
+    if (kind == 10) {
+        vec4 texel = texture(atlas, frag_uv);
+        float a = texel.a * frag_color.a;
+        out_color = vec4(texel.rgb / max(texel.a, 0.0001), a);
+        return;
+    }
     if (kind == 8) {
         float fall = clamp(1.0 - length(p) / frag_half.x, 0.0, 1.0);
         out_color = vec4(frag_color.rgb, frag_color.a * fall * fall);

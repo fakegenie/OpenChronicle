@@ -7,6 +7,7 @@
 #include "port_mod.h"
 #include "port_overrides.h"
 #include "render.h"
+#include "port_crt.h"
 #include "launcher.h"
 #include "memory_card.h"
 #include "touch.h"
@@ -110,9 +111,10 @@ static int setting_number(const char *name, int fallback) {
 int main(int argc, char **argv) {
     port_arguments = argv;
     setvbuf(stdout, NULL, _IOLBF, 0);
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
     int first = 1;
     int scale = 0, samples = 0, mute = 0, background = 0, fullscreen = -1, vsync = -1, smooth = -1;
-    const char *aspect = NULL;
+    const char *aspect = NULL, *mods = NULL;
     int window_width = 0, window_height = 0;
     for (; first < argc; ++first) {
         if (!strcmp(argv[first], "--debug")) port_debug = 1;
@@ -120,7 +122,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[first], "--background")) background = 1;
         else if (!strcmp(argv[first], "--fullscreen")) fullscreen = 1;
         else if (!strcmp(argv[first], "--vsync")) vsync = 1;
-        else if (!strcmp(argv[first], "--mods") && first + 1 < argc) port_setting_set("mods.enabled", argv[++first]);
+        else if (!strcmp(argv[first], "--mods") && first + 1 < argc) mods = argv[++first];
         else if (!strcmp(argv[first], "--smooth") && first + 1 < argc) smooth = atoi(argv[++first]);
         else if (!strcmp(argv[first], "--aspect") && first + 1 < argc) aspect = argv[++first];
         else if (!strcmp(argv[first], "--window") && first + 1 < argc) sscanf(argv[++first], "%dx%d", &window_width, &window_height);
@@ -130,6 +132,8 @@ int main(int argc, char **argv) {
     }
     enter_documents();
     int launcher = first == argc;
+    if (!launcher) port_launcher_load_settings();
+    if (mods) port_setting_set("mods.enabled", mods);
     if (launcher && !port_launcher()) return 0;
     const char *disc = first == argc - 1 ? argv[first] : launcher ? port_setting("disc") : NULL;
     if (launcher) {
@@ -155,7 +159,7 @@ int main(int argc, char **argv) {
     if (!window_width && set_window) sscanf(set_window, "%dx%d", &window_width, &window_height);
     render_set_window(window_width, window_height, fullscreen >= 0 ? fullscreen : setting_number("render.fullscreen", 0));
     render_set_vsync(vsync >= 0 ? vsync : setting_number("render.vsync", 0));
-    render_set_filter(port_setting("render.filter") && !strcmp(port_setting("render.filter"), "nearest"));
+    render_apply_crt_settings();
     int numerator = 0, denominator = 0;
     if (aspect && !strcmp(aspect, "fill")) render_fill_screen();
     else if (aspect && sscanf(aspect, "%d:%d", &numerator, &denominator) == 2) render_set_aspect(numerator, denominator);

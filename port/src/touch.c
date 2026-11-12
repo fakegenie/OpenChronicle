@@ -13,11 +13,11 @@
 #include <TargetConditionals.h>
 #endif
 
-enum { FINGER_LIMIT = 10, CONTROL_LIMIT = 20, SIDE_LEFT = 0, SIDE_RIGHT = 1 };
+enum { FINGER_LIMIT = 10, CONTROL_LIMIT = 24, SIDE_LEFT = 0, SIDE_RIGHT = 1 };
 enum { CONTROL_BUTTON, CONTROL_SHOULDER, CONTROL_PILL, CONTROL_DPAD, CONTROL_LEFT_STICK, CONTROL_RIGHT_STICK,
-       CONTROL_SAVE, CONTROL_LOAD };
+       CONTROL_SAVE, CONTROL_LOAD, CONTROL_PAUSE };
 enum { HELD_BUTTONS = -1 };
-enum { IDLE_AFTER = 4000, IDLE_FADE = 800, REVEAL_TIME = 3000, NOTICE_TIME = 2000, FADE_TIME = 400 };
+enum { IDLE_AFTER = 4000, IDLE_FADE = 800, REVEAL_TIME = 3000, NOTICE_TIME = 2000, FADE_TIME = 400, STATE_WAIT_LIMIT = 300 };
 
 #define FONT_POINTS 12.0f
 #define DIAGONAL 0.38f
@@ -80,6 +80,7 @@ static float fade = 1;
 static int states = 1;
 static PortState quick;
 static int quick_kind;
+static int quick_fields;
 static int quick_stored = -1;
 static Uint64 revealed_at;
 static Uint64 notice_at;
@@ -115,6 +116,8 @@ static void buzz(void) {}
 
 void port_touch_set_mode(int chosen) { mode = chosen; }
 
+int port_touch_get_mode(void) { return mode; }
+
 void port_touch_set_haptics(int on) { haptics = on; }
 
 void port_touch_set_states(int on) { states = on; }
@@ -140,8 +143,9 @@ static void layout(SDL_Window *window) {
     float top = safe.y + 12 * s, bottom = safe.y + safe.h - 12 * s, middle = safe.x + safe.w / 2.0f;
     float face_x = right - 78 * s, face_y = top + 142 * s, spread = 44 * s, radius = 23 * s;
     control_count = 0;
-    add(CONTROL_SHOULDER, left + 32 * s, top + 18 * s, 64 * s, 32 * s, PORT_INPUT_L2, "L2", 0, 1, 1, 1);
-    add(CONTROL_SHOULDER, left + 104 * s, top + 18 * s, 64 * s, 32 * s, PORT_INPUT_L1, "L1", 0, 1, 1, 1);
+    add(CONTROL_PAUSE, left + 18 * s, top + 18 * s, 36 * s, 30 * s, 0, NULL, 0, 1, 1, 1);
+    add(CONTROL_SHOULDER, left + 74 * s, top + 18 * s, 60 * s, 32 * s, PORT_INPUT_L2, "L2", 0, 1, 1, 1);
+    add(CONTROL_SHOULDER, left + 142 * s, top + 18 * s, 60 * s, 32 * s, PORT_INPUT_L1, "L1", 0, 1, 1, 1);
     add(CONTROL_SHOULDER, right - 104 * s, top + 18 * s, 64 * s, 32 * s, PORT_INPUT_R1, "R1", 0, 1, 1, 1);
     add(CONTROL_SHOULDER, right - 32 * s, top + 18 * s, 64 * s, 32 * s, PORT_INPUT_R2, "R2", 0, 1, 1, 1);
     add(CONTROL_SHOULDER, left + 32 * s, bottom - 18 * s, 64 * s, 32 * s, PORT_INPUT_L3, "L3", 0, 1, 1, 1);
@@ -160,7 +164,9 @@ static void layout(SDL_Window *window) {
     add(CONTROL_LOAD, middle + 58 * s, top + 18 * s, 104 * s, 30 * s, 0, "LOAD STATE", 0, 1, 1, 1);
 }
 
-static int action(const Control *control) { return control->kind == CONTROL_SAVE || control->kind == CONTROL_LOAD; }
+static int action(const Control *control) {
+    return control->kind == CONTROL_SAVE || control->kind == CONTROL_LOAD || control->kind == CONTROL_PAUSE;
+}
 
 static int action_at(float x, float y) {
     float slack = 8 * scale;
@@ -187,24 +193,35 @@ static int stored(void) {
     return quick.data || quick_stored;
 }
 
-static void run_action(int kind) {
-    if (quick_kind) return;
+int port_touch_state_stored(void) { return stored(); }
+
+const char *port_touch_save_state(void) {
+    if (quick_kind) return "A state action is already pending";
+    if (!port_state_request(STATE_SAVE, &quick)) return port_state_problem();
+    quick_kind = STATE_SAVE;
+    quick_fields = 0;
+    return NULL;
+}
+
+const char *port_touch_load_state(void) {
+    if (quick_kind) return "A state action is already pending";
     char path[1100];
     quick_path(path, sizeof path);
-    if (kind == CONTROL_LOAD && !stored()) {
-        show_notice("No state saved yet");
+    if (!stored()) return "No state saved yet";
+    if (!quick.data && port_state_read(&quick, path)) return "The saved state can't be loaded";
+    if (!port_state_request(STATE_LOAD, &quick)) return port_state_problem();
+    quick_kind = STATE_LOAD;
+    quick_fields = 0;
+    return NULL;
+}
+
+static void run_action(int kind) {
+    if (kind == CONTROL_PAUSE) return;
+    const char *problem = kind == CONTROL_SAVE ? port_touch_save_state() : port_touch_load_state();
+    if (problem) {
+        show_notice(problem);
         return;
     }
-    if (kind == CONTROL_LOAD && !quick.data && port_state_read(&quick, path)) {
-        show_notice("The saved state can't be loaded");
-        return;
-    }
-    int wanted = kind == CONTROL_SAVE ? STATE_SAVE : STATE_LOAD;
-    if (!port_state_request(wanted, &quick)) {
-        show_notice(port_state_problem());
-        return;
-    }
-    quick_kind = wanted;
     buzz();
 }
 
@@ -223,9 +240,14 @@ static const char *finish_message(void) {
 }
 
 static void finish_action(void) {
-    if (!quick_kind || port_state_pending()) return;
+    if (!quick_kind) return;
+    if (port_state_pending()) {
+        if (++quick_fields > STATE_WAIT_LIMIT) port_state_cancel("Can't save on this screen");
+        else return;
+    }
     show_notice(finish_message());
     quick_kind = 0;
+    quick_fields = 0;
 }
 
 static int revealed(void) { return SDL_GetTicks() - revealed_at < REVEAL_TIME; }
@@ -310,6 +332,31 @@ static void steer(const Finger *finger, struct port_input_state *state) {
     }
 }
 
+void port_touch_clear(void) {
+    finger_count = 0;
+    tap_count = 0;
+    pressed = 0;
+    pressed_before = 0;
+    memset(stick_held, 0, sizeof stick_held);
+    memset(knob_x, 0, sizeof knob_x);
+    memset(knob_y, 0, sizeof knob_y);
+}
+
+int port_touch_pause_hit(const SDL_Event *event) {
+    if (!event || event->type != SDL_EVENT_FINGER_DOWN) return 0;
+    SDL_Window *window = render_window();
+    if (!window) return 0;
+    if (!control_count) layout(window);
+    int width = 0, height = 0;
+    SDL_GetWindowSize(window, &width, &height);
+    if (width <= 0 || height <= 0) return 0;
+    if (!shown() && !revealed()) return 0;
+    if (action_at(event->tfinger.x * width, event->tfinger.y * height) != CONTROL_PAUSE) return 0;
+    if (haptics) buzz();
+    port_touch_clear();
+    return 1;
+}
+
 void port_touch_event(const SDL_Event *event) {
     if (event->type == SDL_EVENT_FINGER_DOWN && tap_count < FINGER_LIMIT) {
         tap_x[tap_count] = event->tfinger.x;
@@ -339,7 +386,7 @@ void port_touch_read(struct port_input_state *state) {
         for (int index = 0; index < tap_count; index++) {
             int kind = action_at(tap_x[index] * width, tap_y[index] * height);
             if (kind && revealed()) run_action(kind);
-            if (states) revealed_at = SDL_GetTicks();
+            revealed_at = SDL_GetTicks();
         }
         tap_count = 0;
         finger_count = 0;
@@ -481,6 +528,12 @@ static void draw_action(const Control *control) {
                (control->kind == CONTROL_LOAD && quick_kind == STATE_LOAD);
     int empty = control->kind == CONTROL_LOAD && !stored();
     plate(TOUCH_BOX, control->x, control->y, control->width / 2, control->height / 2, control->height / 2, busy, control);
+    if (control->kind == CONTROL_PAUSE) {
+        float bar_dx = 3.6f * scale, bar_hw = 1.6f * scale, bar_hh = 6.2f * scale;
+        put(TOUCH_BOX, control->x - bar_dx, control->y, bar_hw, bar_hh, 0, bar_hw, 0, 1, 1, 1, 0.9f);
+        put(TOUCH_BOX, control->x + bar_dx, control->y, bar_hw, bar_hh, 0, bar_hw, 0, 1, 1, 1, 0.9f);
+        return;
+    }
     label(control->label, control->x, control->y, empty ? 0.45f : busy ? 1 : 0.85f);
 }
 

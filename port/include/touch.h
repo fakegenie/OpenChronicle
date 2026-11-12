@@ -10,7 +10,7 @@ struct port_input_state;
 union SDL_Event;
 
 enum { TOUCH_OFF, TOUCH_ON, TOUCH_SMART };
-enum { TOUCH_TEXT, TOUCH_DISC, TOUCH_RING, TOUCH_BOX, TOUCH_BOX_LINE, TOUCH_TRIANGLE_LINE, TOUCH_CROSS, TOUCH_ARROW, TOUCH_GLOW, TOUCH_DPAD_ARM };
+enum { TOUCH_TEXT, TOUCH_DISC, TOUCH_RING, TOUCH_BOX, TOUCH_BOX_LINE, TOUCH_TRIANGLE_LINE, TOUCH_CROSS, TOUCH_ARROW, TOUCH_GLOW, TOUCH_DPAD_ARM, TOUCH_RGBA };
 
 typedef struct {
     float x;
@@ -32,8 +32,14 @@ typedef struct {
 } TouchShape;
 
 void port_touch_set_mode(int mode);
+int port_touch_get_mode(void);
 void port_touch_set_haptics(int on);
 void port_touch_set_states(int on);
+void port_touch_clear(void);
+int port_touch_pause_hit(const union SDL_Event *event);
+int port_touch_state_stored(void);
+const char *port_touch_save_state(void);
+const char *port_touch_load_state(void);
 void port_touch_read(struct port_input_state *state);
 void port_touch_event(const union SDL_Event *event);
 int port_touch_shapes(TouchShape *shapes, int limit, int pixel_width, int pixel_height);

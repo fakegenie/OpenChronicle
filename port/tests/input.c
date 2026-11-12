@@ -129,7 +129,30 @@ int main(void) {
     port_input_report(&state, &report);
     assert(pressed(&report) == (PORT_INPUT_L2 | PORT_INPUT_R2));
     assert(report.pressure[PORT_INPUT_PRESSURE_R2] == PORT_INPUT_PRESSURE_FULL);
+    uint16_t suppressed = 0;
+    assert(port_input_filter_buttons(PORT_INPUT_SELECT, &suppressed) == PORT_INPUT_SELECT);
+    assert(suppressed == 0);
+    assert(port_input_filter_buttons(PORT_INPUT_START, &suppressed) == PORT_INPUT_START);
+    assert(suppressed == 0);
+    assert(port_input_filter_buttons(PORT_INPUT_START | PORT_INPUT_SELECT | PORT_INPUT_CROSS, &suppressed) == PORT_INPUT_CROSS);
+    assert(suppressed == (PORT_INPUT_START | PORT_INPUT_SELECT));
+    assert(port_input_filter_buttons(PORT_INPUT_SELECT, &suppressed) == 0);
+    assert(suppressed == PORT_INPUT_SELECT);
+    assert(port_input_filter_buttons(0, &suppressed) == 0);
+    assert(suppressed == 0);
+    assert(port_input_filter_buttons(PORT_INPUT_SELECT, &suppressed) == PORT_INPUT_SELECT);
+
+    suppressed = UINT16_MAX;
+    assert(port_input_filter_buttons(PORT_INPUT_CROSS | PORT_INPUT_DOWN, &suppressed) == 0);
+    assert(suppressed == (PORT_INPUT_CROSS | PORT_INPUT_DOWN));
+    assert(port_input_filter_buttons(PORT_INPUT_CROSS | PORT_INPUT_UP, &suppressed) == PORT_INPUT_UP);
+    assert(suppressed == PORT_INPUT_CROSS);
+    assert(port_input_filter_buttons(0, &suppressed) == 0);
+    assert(suppressed == 0);
+    assert(port_input_filter_buttons(PORT_INPUT_CROSS, &suppressed) == PORT_INPUT_CROSS);
+
     assert(port_input_init() == 1);
+    port_input_suppress_held();
     port_input_read(&report);
     assert(pressed(&report) == 0);
     port_input_close();

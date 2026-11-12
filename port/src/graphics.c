@@ -36,6 +36,10 @@ void port_timer_reset(void) {
     timer_lines = 0;
 }
 
+void port_graphics_resumed(void) {
+    next_field = 0;
+}
+
 uint32_t port_timer_lines(void) {
     return timer_lines;
 }

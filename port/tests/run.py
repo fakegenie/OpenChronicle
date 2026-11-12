@@ -35,10 +35,10 @@ def main():
         sdk_libraries.append("-Wl,-Xlink=/force:unresolved")
     else:
         sdk_libraries.append(f"-Wl,-rpath,{sdk / 'lib'}")
-    include = ["-Iport/include", "-Iengine/ps2/include", "-Iengine/ps2/include/sce"]
+    include = ["-Iport/include", "-Iport/third_party/port-helpers", "-Iengine/ps2/include", "-Iengine/ps2/include/sce"]
     temporary = root / "build" / "port" / "tests"
     headers = temporary / "include"
-    c_include = ["-Iport/include", "-I" + str(headers), "-I" + str(headers / "sce")]
+    c_include = ["-Iport/include", "-Iport/third_party/port-helpers", "-I" + str(headers), "-I" + str(headers / "sce")]
     windows = ["-mno-ms-bitfields", "-D_FILE_OFFSET_BITS=64"] if WINDOWS else []
     c_flags = ["clang", "-std=c11", "-pthread", "-fsigned-char", "-Wall", "-Wextra", "-Werror", *(["-Wno-deprecated-declarations"] if DARWIN else []), *windows, *c_include, *sdk_cflags]
     cpp_flags = ["clang++", "-std=c++26", "-pthread", "-O2", "-DPORT", "-DPAL", "-fsigned-char", "-fms-extensions", "-w",
@@ -56,6 +56,7 @@ def main():
         ("memory_card", [*c_flags, "port/tests/memory_card.c", "port/src/memory_card.c"]),
         ("executable", [*c_flags, "port/tests/executable.c", "port/src/executable.c"]),
         ("input", [*c_flags, "port/tests/input.c", "port/src/input.c", "port/src/hooks.c", "port/src/mods.c", "port/src/overrides.c", "-lm"]),
+        ("crt", [*c_flags, "port/tests/crt.c", "port/src/ph_crt_impl.c", "-lm"]),
         ("math", [*cpp_flags, "-ffunction-sections", "-fdata-sections", "port/tests/math.cpp",
                   "port/src/frame.cpp", "port/src/collision.cpp",
                   "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP]),

@@ -1,5 +1,7 @@
 #include "port_present.h"
+#include "audio.h"
 #include "input.h"
+#include "pause.h"
 #include "port_graphics.h"
 #include "render.h"
 #include "port_mod.h"
@@ -31,6 +33,8 @@ static int park_wanted;
 static int parked;
 static int stop_wanted;
 static int stopped;
+static int pad_start_down;
+static int pad_back_down;
 
 int port_present_init(int enabled) {
     (void)enabled;
@@ -136,13 +140,78 @@ static void quit(void) {
     exit(0);
 }
 
-static void wait_for_foreground(void) {
+static void clear_queue(void) {
+    SDL_LockMutex(lock);
+    queued_first = 0;
+    queued_count = 0;
+    SDL_UnlockMutex(lock);
+}
+
+static void open_pause(int by_chord) {
+    if (port_pause_active()) return;
     park_game();
+    audio_set_paused(1);
+    clear_queue();
+    port_touch_clear();
+    port_input_suppress_held();
+    port_pause_open(by_chord);
+    render_redraw();
+}
+
+static void close_pause(void) {
+    if (!port_pause_active()) return;
+    port_pause_close();
+    clear_queue();
+    port_touch_clear();
+    port_input_suppress_held();
+    port_graphics_resumed();
+    audio_set_paused(0);
+    release_game();
+    render_redraw();
+}
+
+static void run_pause_action(int act) {
+    if (act == PAUSE_RESUME) {
+        close_pause();
+    } else if (act == PAUSE_SAVE_STATE) {
+        const char *problem = port_touch_save_state();
+        if (problem) port_pause_set_status(problem);
+        else close_pause();
+    } else if (act == PAUSE_LOAD_STATE) {
+        const char *problem = port_touch_load_state();
+        if (problem) port_pause_set_status(problem);
+        else close_pause();
+    } else if (act == PAUSE_QUIT) {
+        quit();
+    }
+}
+
+static void wait_for_foreground(void) {
+    int was_paused = port_pause_active();
+    if (!was_paused) {
+        park_game();
+        audio_set_paused(1);
+    }
     SDL_Event event;
     while (SDL_WaitEvent(&event) && event.type != SDL_EVENT_DID_ENTER_FOREGROUND)
         if (event.type == SDL_EVENT_QUIT) quit();
-    release_game();
+    if (!was_paused) {
+        port_graphics_resumed();
+        audio_set_paused(0);
+        release_game();
+    }
     render_redraw();
+}
+
+static void track_pad_chord(const SDL_Event *event) {
+    if (event->type == SDL_EVENT_GAMEPAD_REMOVED) {
+        pad_start_down = 0;
+        pad_back_down = 0;
+    } else if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || event->type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
+        int down = event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+        if (event->gbutton.button == SDL_GAMEPAD_BUTTON_START) pad_start_down = down;
+        if (event->gbutton.button == SDL_GAMEPAD_BUTTON_BACK) pad_back_down = down;
+    }
 }
 
 static void handle(const SDL_Event *event) {
@@ -157,19 +226,55 @@ static void handle(const SDL_Event *event) {
     if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat &&
         (event->key.key == SDLK_F11 || (event->key.key == SDLK_RETURN && (event->key.mod & SDL_KMOD_ALT)))) {
         render_toggle_fullscreen();
+        render_redraw();
         return;
     }
     if (event->type == SDL_EVENT_WINDOW_RESIZED || event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
         event->type == SDL_EVENT_WINDOW_EXPOSED)
         render_redraw();
+
+    track_pad_chord(event);
+
+    if (port_pause_active()) {
+        run_pause_action(port_pause_event(event));
+        return;
+    }
+
+    if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat &&
+        (event->key.key == SDLK_ESCAPE || event->key.key == SDLK_AC_BACK) &&
+        (!event->key.windowID || event->key.windowID == SDL_GetWindowID(render_window()))) {
+        open_pause(0);
+        return;
+    }
+    if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        if (event->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE) {
+            open_pause(0);
+            return;
+        }
+        if ((event->gbutton.button == SDL_GAMEPAD_BUTTON_START || event->gbutton.button == SDL_GAMEPAD_BUTTON_BACK) &&
+            pad_start_down && pad_back_down) {
+            open_pause(1);
+            return;
+        }
+    }
+    if (port_touch_pause_hit(event)) {
+        open_pause(0);
+        return;
+    }
+
     enqueue(event);
 }
 
 void port_present_run(void) {
     for (;;) {
         SDL_Event event;
-        if (SDL_WaitEvent(&event)) handle(&event);
+        if (port_pause_active()) {
+            if (SDL_WaitEventTimeout(&event, 16)) handle(&event);
+        } else {
+            if (SDL_WaitEvent(&event)) handle(&event);
+        }
         while (SDL_PollEvent(&event)) handle(&event);
+        if (port_pause_active()) run_pause_action(port_pause_tick());
         stop_if_wanted();
         render_show_screens();
     }

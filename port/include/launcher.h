@@ -32,6 +32,8 @@ typedef struct {
 } LauncherFont;
 
 int port_launcher(void);
+void port_launcher_load_settings(void);
+void port_launcher_save_setting(const char *key, const char *value);
 int launcher_font_bake(int face, float pixels, LauncherFont *font);
 float launcher_font_kern(const LauncherFont *font, int first, int second);
 
